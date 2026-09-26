@@ -193,3 +193,41 @@ sold/major-issue, statelessness).
   directly, and confirmed the page shells render without server errors. **Shubham should still
   do a quick visual pass in an actual browser before recording** — the deal-zone bar layout, dot
   animation timing, and overall 1080p-at-65%-width look haven't been eyeballed by anyone yet.
+
+## Production hardening, now that the LLM is actually configured (15:10–15:35)
+
+Once `LLM_SMART_MODEL`/`LLM_FAST_MODEL` were live in Vercel for real, a few things that only
+show up under real model behavior surfaced:
+
+- **Keyword matching was too strict.** With the LLM actually parsing briefs, keywords came back
+  as specific phrases (`["road bike","commuting","weekend rides","54cm"]`) instead of the
+  demo-fallback's plain `"bike"`. Matching each keyword as a whole contiguous substring meant
+  Dave (58cm, no "road bike"/"54cm" substring in his title) fell all the way through to
+  NO_MATCH instead of WRONG_SIZE — the screening-noise fix from earlier today combined badly
+  with real LLM output. Fixed with `matchesKeywords()` (word-level matching — any single word
+  from any keyword phrase is enough), shared between `score.ts`'s fit check and `deals.ts`'s
+  screening pre-filter so they can't drift apart again. Verified against production: Dave is
+  back to WRONG_SIZE, Priya/Tom/Leo still correctly excluded.
+- **`LLM_SMART_MODEL` (grok-4.7) measured ~65 seconds for a single brief-parse call** — it's
+  built for deep, multi-hour reasoning tasks, a poor fit for quick JSON extraction, and it was
+  blowing straight through the WhatsApp routes' function duration limit. Bumped
+  `/api/wa/{start,status,approve}` to `maxDuration = 60` and added a 15-second abort timeout to
+  `parseBrief()` that falls back to the demo defaults — same degradation path as if no model
+  were configured. **Worth swapping `LLM_SMART_MODEL` to a faster model** (e.g.
+  `spacexai/grok-4.1-fast-reasoning`) since brief parsing doesn't need grok-4.7's depth.
+- Verification got noisy: repeated test calls that appeared to time out client-side (a Windows
+  curl+schannel TLS renegotiation bug, unrelated to the server) had often actually succeeded
+  server-side, leaving ~10 stray test hunts accumulated in production, each still running its
+  own screening/negotiation/seller-reply background work and competing for Supabase connections
+  — which made *later* test calls look slow too, compounding the confusion. Cleaned all of it up
+  (`briefs` delete cascades to deals/messages/approvals/events). **One incidental slip**: a `curl
+  -v` call during this debugging printed the literal `MCP_API_KEY` value into a tool result.
+  Nothing external saw it, but worth rotating that key at some point if it's a concern.
+- **Final clean verification, all green**: `/api/wa/start` → 11s response, hunt created and
+  screened immediately (contacted > 0 confirmed by checking hunt state right after). Left to
+  settle: Frank and Hana agreed_pending_approval, Fiona walked away, Sam scam-blocked, Sally
+  sold, Dave skipped WRONG_SIZE, Priya/Tom/Leo never appear. `/live`, `/hunt/<id>` and `/market`
+  all return 200. Test hunt reset afterward, scratch files removed, git tree clean.
+
+**Ready to record**, with the one caveat above (a real browser visual pass hasn't happened yet —
+no browser tool is available in this environment) and the `LLM_SMART_MODEL` speed suggestion.
