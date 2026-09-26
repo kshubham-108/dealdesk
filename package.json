@@ -10,9 +10,11 @@
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.117.2",
+    "ai": "^7.0.114",
     "next": "15.5.26",
     "react": "^19",
-    "react-dom": "^19"
+    "react-dom": "^19",
+    "zod": "^4.6.5"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.3.7",
