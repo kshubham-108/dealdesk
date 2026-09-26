@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabase } from "@/lib/supabase";
 import { getHuntState } from "@/lib/huntState";
+import { computeResults } from "@/lib/results";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -10,5 +11,5 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
   const supabase = getSupabase();
   const state = await getHuntState(supabase, id);
   if (!state) return NextResponse.json({ error: "hunt not found" }, { status: 404 });
-  return NextResponse.json(state);
+  return NextResponse.json({ ...state, results: computeResults(state) });
 }

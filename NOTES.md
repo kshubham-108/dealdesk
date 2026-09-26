@@ -130,3 +130,66 @@ box instead. Appended as §14 to AGENTS.md/CLAUDE.md — full details there.
 
 **Next:** verify the whole flow against production via curl (`/api/wa/start` → repeated
 `/api/autopilot/tick` → `/api/wa/status` → `/api/wa/approve`), then the arena UI (M3).
+
+## Production verification + a real bug (14:30ish)
+
+Ran the full demo hunt against production with curl only: `/api/wa/start` → `/api/autopilot/tick`
+every 2.5s → `/api/wa/status` → `/api/wa/approve`. **Found a real bug**: `runDecision` persisted
+the buyer's opening/counter messages but never actually called the seller's reply function —
+that trigger only existed on the manual Kerbside chat route. Every autopilot deal was silently
+ghosting in production because sellers never got a chance to answer. Fixed by triggering
+`sendSellerReply()` via `after()` from `runDecision` too, same pattern as the chat route. Re-ran
+the full hunt after the fix — every outcome now matches §8c exactly (Frank agreed £235, Hana
+agreed £240 then closed once Frank was approved, Fiona walked away, Gary ghosted, Sam scam-
+blocked, Sally sold, Dave skipped). Also fixed a double-slash in the `/hunt/<id>` link (trailing
+slash in `NEXT_PUBLIC_APP_URL`).
+
+Then a second report: `/api/wa/status` right after `/api/wa/start` showed "Contacted 0" — the
+tick had run, but a fresh follow-up call could still land on lock contention and silently no-op.
+Added `runOneTickEnsured()` (retries through contention with backoff) for the two WhatsApp
+routes specifically; `/api/autopilot/tick` keeps its plain skip-on-contention behavior since
+that's the whole point of the lock for a 2.5s poller.
+
+## M3 — Arena UI (trimmed scope), gap check (14:45–15:40)
+
+**Gap check** — all present already from earlier work, nothing missing: §14 in AGENTS.md/
+CLAUDE.md, the tick lock, `GET /api/hunt/latest`, and the vitest suite (33 tests: §8c outcomes,
+the 10,000-run property test, the leak test, one case per scam code, chase/ghost/wait,
+sold/major-issue, statelessness).
+
+- **Screening noise**: `screenListingsForHunt` now pre-filters listings by keyword/category
+  match *before* creating a deal row at all, so NO_MATCH listings (Priya, Tom, Leo for a bike
+  hunt) never appear anywhere — not the screening strip, not the WhatsApp reply. WRONG_SIZE
+  (Dave) still gets a skipped deal row since that's a genuine near-miss worth explaining.
+- **`lib/results.ts`**: pure `computeResults(state)` — screened/skipped counts and reasons,
+  messages sent by each side, chases, scams blocked, walk-aways, time to first agreement, total
+  hunt time, best deal (asked→agreed, saved £/%, vs. real-market median when available). Wired
+  into both state endpoints so the arena and `/api/wa/status` share one implementation.
+  **Caught a real bug here too**: `isHuntSettled` used `.every()` over the deals array, which is
+  vacuously `true` on an *empty* array — before screening ever ran, the hunt looked "settled,"
+  which would have permanently blocked the arena's own auto-tick loop from ever starting. Fixed
+  by requiring `deals.length > 0` first. Found by testing locally before pushing, not by
+  inspection — a reminder that vacuous-truth bugs on `.every()`/`.some()` are easy to miss.
+- **`POST /api/hunt/<id>/reset`** and **`POST /api/hunt/<id>/import`** (the JSON-array fallback
+  for real listings when MCP isn't wired up) — both were missing, added per §10.
+- **Arena** (`app/_components/Arena.tsx` + `DealZoneBar.tsx`): one shared client component used
+  by both `/live` (mode `latest`, follows `GET /api/hunt/latest`) and `/hunt/<id>` (mode
+  `fixed`). It polls its state endpoint every 2s and independently drives
+  `POST /api/autopilot/tick` every 2.5s until `results.ready`. Trimmed scope per instruction: no
+  split chat, no audience-view toggle — both the buyer's limit and the seller's floor are always
+  shown on the deal-zone bar, labelled "neither agent can see the other's limit". Sections, in
+  priority order: screening strip (DealScore + breakdown on hover, HIGH RISK badge, skipped
+  greyed with reason) → negotiation cards (deal-zone bar: asking/limit/floor as lock markers,
+  overlap shaded green or "no overlap" in red, buyer offers as blue dots, seller counters as
+  green dots, agreed price as a star, animated in via a CSS `pop` keyframe) → approval card
+  (recommended first, Approve/Decline) → results panel → real market scan + JSON import + reset.
+  White background, one accent colour (indigo) for UI chrome; blue/green/amber are reserved for
+  the deal-zone bar's semantic dots, which are data encoding, not general chrome.
+  Footer: "Kerbside is a test marketplace · sellers are simulated · Built with Grok Bot, Wassist,
+  Supabase and Vercel" (no Telegram copy anywhere — checked, there wasn't any yet).
+- **Verified locally** (no browser tool available in this environment, so this was curl +
+  reading the dev server log, not a visual pass): created a hunt, ran the tick loop to full
+  settlement, confirmed `results.ready` flips correctly, tested approve/import/reset endpoints
+  directly, and confirmed the page shells render without server errors. **Shubham should still
+  do a quick visual pass in an actual browser before recording** — the deal-zone bar layout, dot
+  animation timing, and overall 1080p-at-65%-width look haven't been eyeballed by anyone yet.
