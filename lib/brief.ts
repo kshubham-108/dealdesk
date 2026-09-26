@@ -27,6 +27,11 @@ export const DEFAULT_BRIEF_FIELDS: BriefFields = {
   max_price: 260,
 };
 
+// Brief parsing blocks the landing page and (worse) the WhatsApp /start
+// reply — a slow/heavy model must never turn that into a minute-long wait.
+// Fall back to the demo defaults rather than let a caller hang.
+const PARSE_TIMEOUT_MS = 15000;
+
 export async function parseBrief(rawText: string): Promise<BriefFields> {
   const model = process.env.LLM_SMART_MODEL;
   if (!model) return DEFAULT_BRIEF_FIELDS;
@@ -35,6 +40,7 @@ export async function parseBrief(rawText: string): Promise<BriefFields> {
     const { object } = await generateObject({
       model,
       schema: BriefFieldsSchema,
+      abortSignal: AbortSignal.timeout(PARSE_TIMEOUT_MS),
       prompt: `Extract a structured buying brief from this second-hand-marketplace request. If a field isn't mentioned, use your best reasonable guess from context, or null for size_token/location/availability. min_condition must be one of "like new", "very good", "good", "fair" — pick the closest one. target_price is what the buyer hopes to pay; max_price is their absolute ceiling. If the request states no max price at all, set max_price = round(target_price × 1.18 / 5) × 5 (round to the nearest £5).\n\n"""${rawText}"""`,
     });
     return object;
