@@ -75,3 +75,58 @@ Kerbside grid/chat + seller side.
 
 **Next:** M2 — `score.ts` (DealScore), `engine.ts` (negotiation ladder), `deals.ts`
 (`runDecision`), the vitest suite, and the hunt state API.
+
+## Amendments v3 + backend (13:50–14:45)
+
+Plan change: Telegram is out, WhatsApp (via a "Wassist" agent hitting our REST endpoints) is in;
+the MCP server is now optional since Grok Bot can feed real listings through the arena's import
+box instead. Appended as §14 to AGENTS.md/CLAUDE.md — full details there.
+
+- `supabase/migrations/001_v3.sql`: adds `briefs.tick_lock_until` and `briefs.source` ('web' |
+  'whatsapp'). **Needs to be run in the Supabase SQL editor before any of this works** — the new
+  columns don't exist in production yet.
+- `lib/score.ts` (DealScore) and `lib/engine.ts` (the negotiation ladder) are pure functions —
+  no DB, no LLM, so they're fully unit-testable. Every constant in them was reverse-engineered
+  by hand from AGENTS.md §8a/§8b and cross-checked against §8c's exact numbers before being
+  written down (e.g. Frank scores exactly 86, opens at exactly £210, agrees at exactly £235).
+  **Found and fixed a real rounding bug** while writing the 10,000-run property test:
+  `round5()` can round a value that's mathematically below a non-multiple-of-5 ceiling up past
+  it (e.g. `round5(103) = 105` when the ceiling is £104) — only surfaces with random,
+  non-round-number max prices, never with the fixed demo data. Fixed by clamping each ladder
+  rung to the ceiling.
+- `lib/seller.ts` was refactored to pull the seller's pricing decision out into a pure
+  `decideSellerOffer()` (accept/counter math, no DB/LLM/delay), so the property test and the
+  §8c outcome tests replay the *exact same* pricing code the running app uses — not a
+  reimplementation that could quietly drift from it. Also added the collection reply (the one
+  exception to "no reply once approved") and `SCAM_MESSAGE`/`SOLD_MESSAGE`/
+  `CONDITION_QUESTION_PATTERN` as named exports so tests can reuse them.
+- `lib/deals.ts` grew `runDecision` (runs the engine once for a deal and persists whatever it
+  decided — messages, status, reason codes, score), `screenListingsForHunt` (the initial
+  DealScore pass that creates 'new'/'skipped' deals), `ensureApproval`, and the full on-approve
+  flow (`approveDeal`/`declineApproval`: marks the deal approved, sends the collection message,
+  closes every other open deal with a polite decline, supersedes other pending approvals).
+- `lib/autopilot.ts`: `tryAcquireTickLock` implements §14.4's lock exactly (claim
+  `tick_lock_until` only where it's null or in the past; no row updated → `{skipped:true}`) so
+  the arena poller, `/api/wa/start` and `/api/wa/status` can all trigger ticks without ever
+  double-sending a message.
+- `lib/wa.ts`: WhatsApp reply text is built entirely from the database (title, seller, asking
+  vs. agreed, DealScore + up to 3 top reasons, other outcomes) — no LLM, and structurally unable
+  to leak the max/ceiling/floor since those fields are never read by this code path.
+- Routes added: `GET /api/hunt/<id>/state`, `GET /api/hunt/latest`, `POST /api/autopilot/tick`
+  (locked), `POST /api/approvals/<id>`, and `/api/wa/{start,status,approve}` (accept GET or POST,
+  auth via `x-api-key` header or `?key=`, params from JSON body or query string).
+- **Tests (`pnpm test`, 33 passing):** opening-offer bounds; the 10,000-run property test (no
+  offer above max, no agreement above the ceiling — this is what caught the rounding bug above);
+  a leak test using max £261 (chosen so it can't collide with any other demo number) confirming
+  £261 only ever appears in the sanctioned final-rung line; one case per scam code; chase→chase→
+  ghosted plus `wait`'s remaining-seconds; sold→close; major-issue→walk-away; statelessness;
+  and the full §8c table (Frank agreed £235, Hana agreed £240 with ceiling lowered to £245, Fiona
+  walks away, Gary ghosted, Sam scam-blocked, Sally sold, Dave skipped WRONG_SIZE).
+  Deliberately did *not* write a naive "seller floor never appears in buyer messages" substring
+  test — `decide()`'s own input type has no floor_price field at all (a structural guarantee,
+  not a runtime one), and a negotiation that converges exactly at the floor is the *correct*
+  outcome, not a leak; a substring check would flag Hana's real agreed-£240-at-floor outcome as
+  a false positive.
+
+**Next:** verify the whole flow against production via curl (`/api/wa/start` → repeated
+`/api/autopilot/tick` → `/api/wa/status` → `/api/wa/approve`), then the arena UI (M3).

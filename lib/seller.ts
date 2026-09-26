@@ -2,13 +2,15 @@ import { generateText } from "ai";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { parsePrice } from "./price";
 
-type Persona =
+export type Persona =
   | "agent_fair"
   | "agent_haggler"
   | "agent_firm"
   | "human_ghost"
   | "human_scammer"
   | "human_sold";
+
+export type SellerIntent = "accept" | "counter" | "availability";
 
 const CONCESSION: Partial<Record<Persona, number>> = {
   agent_fair: 0.5,
@@ -29,16 +31,47 @@ const TERMINAL_STATUSES = [
   "scam_blocked",
   "sold",
   "closed_other",
+  "approved",
 ];
 
-const SCAM_MESSAGE =
+export const SCAM_MESSAGE =
   "Yes available!! Perfect condition, no issues. I'm working offshore so " +
   "can't meet. Pay by bank transfer and I'll send it by courier today, " +
   "just need a £50 deposit to hold it.";
 
-const CONDITION_QUESTION = /damage|fault|condition|issue|scratch|wear|broken/i;
+export const SOLD_MESSAGE = "Sorry, it sold this morning!";
+
+export const CONDITION_QUESTION_PATTERN = /damage|fault|condition|issue|scratch|wear|broken/i;
+const CONDITION_QUESTION = CONDITION_QUESTION_PATTERN;
 
 const round5 = (x: number) => Math.round(x / 5) * 5;
+
+// Pure pricing decision (AGENTS.md §7) — the only place seller price logic
+// lives. Deal-agent personas only; sold/scammer/ghost personas short-circuit
+// before this is ever called. Never pass the floor anywhere but here.
+export function decideSellerOffer(params: {
+  persona: Persona;
+  askingPrice: number;
+  floorPrice: number;
+  buyerOffer: number | null;
+  prevSellerOffer: number | null;
+}): { intent: SellerIntent; price: number } {
+  if (params.buyerOffer == null) {
+    return { intent: "availability", price: params.askingPrice };
+  }
+  if (params.buyerOffer >= params.floorPrice) {
+    return { intent: "accept", price: params.buyerOffer };
+  }
+  const concession = CONCESSION[params.persona] ?? 0.3;
+  const prev = params.prevSellerOffer ?? params.askingPrice;
+  return {
+    intent: "counter",
+    price: Math.max(
+      params.floorPrice,
+      round5(prev - (prev - params.buyerOffer) * concession)
+    ),
+  };
+}
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -49,14 +82,17 @@ function randomDelayS(min: number, max: number) {
 }
 
 // Called from after() on the buyer's message route — never awaited by the
-// request itself, so it must not throw uncaught.
+// request itself, so it must not throw uncaught. `intent: "approval_confirmed"`
+// is the one exception to the terminal-status silence: it's how the seller
+// arranges collection right after the buyer approves.
 export async function sendSellerReply(
   supabase: SupabaseClient,
   dealId: string,
-  buyerMessageBody: string
+  buyerMessageBody: string,
+  explicitIntent?: "approval_confirmed"
 ) {
   try {
-    await runSellerReply(supabase, dealId, buyerMessageBody);
+    await runSellerReply(supabase, dealId, buyerMessageBody, explicitIntent);
   } catch (err) {
     console.error("seller reply failed", dealId, err);
   }
@@ -65,7 +101,8 @@ export async function sendSellerReply(
 async function runSellerReply(
   supabase: SupabaseClient,
   dealId: string,
-  buyerMessageBody: string
+  buyerMessageBody: string,
+  explicitIntent?: "approval_confirmed"
 ) {
   const { data: deal } = await supabase
     .from("deals")
@@ -74,20 +111,29 @@ async function runSellerReply(
     .single();
   if (!deal) return;
 
-  // No reply at all once the deal is terminal or awaiting buyer approval,
-  // except the collection reply (wired up with the approval flow in M5).
-  if (deal.status === "agreed_pending_approval" || TERMINAL_STATUSES.includes(deal.status)) {
+  const listing = deal.listings as Record<string, unknown>;
+  const persona = listing.persona as Persona;
+
+  if (explicitIntent === "approval_confirmed") {
+    if (persona === "human_ghost" || persona === "human_scammer" || persona === "human_sold") return;
+    await sleep(randomDelayS(2, 4) * 1000);
+    const location = (listing.location as string | null) ?? "the usual spot";
+    const body = `Great, I'm around after 6 near ${location}. I'll send the exact address nearer the time.`;
+    await insertSellerMessage(supabase, dealId, body, null, "collection", {});
+    await logEvent(supabase, deal.brief_id, dealId, "collection_arranged", {});
     return;
   }
 
-  const listing = deal.listings as Record<string, unknown>;
-  const persona = listing.persona as Persona;
+  // No reply at all once the deal is terminal or awaiting buyer approval.
+  if (deal.status === "agreed_pending_approval" || TERMINAL_STATUSES.includes(deal.status)) {
+    return;
+  }
 
   if (persona === "human_ghost") return;
 
   if (persona === "human_sold") {
     await sleep(randomDelayS(5, 5) * 1000);
-    await insertSellerMessage(supabase, dealId, "Sorry, it sold this morning!", null, "sold", {});
+    await insertSellerMessage(supabase, dealId, SOLD_MESSAGE, null, "sold", {});
     await logEvent(supabase, deal.brief_id, dealId, "seller_replied", { intent: "sold" });
     return;
   }
@@ -109,26 +155,18 @@ async function runSellerReply(
   const priorSellerMsgs = (priorMessages ?? []).filter((m) => m.sender === "seller");
   const isFirstReply = priorSellerMsgs.length === 0;
   const lastSellerPriceMsg = [...priorSellerMsgs].reverse().find((m) => m.price != null);
-  const prev = (lastSellerPriceMsg?.price as number | undefined) ?? (listing.asking_price as number);
 
   const askingPrice = listing.asking_price as number;
   const floor = listing.floor_price as number;
-  const concession = CONCESSION[persona] ?? 0.3;
-
   const buyerOffer = parsePrice(buyerMessageBody);
 
-  let intent: "accept" | "counter" | "availability";
-  let price: number;
-  if (buyerOffer == null) {
-    intent = "availability";
-    price = askingPrice;
-  } else if (buyerOffer >= floor) {
-    intent = "accept";
-    price = buyerOffer;
-  } else {
-    intent = "counter";
-    price = Math.max(floor, round5(prev - (prev - buyerOffer) * concession));
-  }
+  const { intent, price } = decideSellerOffer({
+    persona,
+    askingPrice,
+    floorPrice: floor,
+    buyerOffer,
+    prevSellerOffer: lastSellerPriceMsg ? (lastSellerPriceMsg.price as number) : null,
+  });
 
   const knownIssueText = listing.known_issue as string | null;
   const askedAboutCondition = CONDITION_QUESTION.test(buyerMessageBody);

@@ -35,7 +35,7 @@ export async function parseBrief(rawText: string): Promise<BriefFields> {
     const { object } = await generateObject({
       model,
       schema: BriefFieldsSchema,
-      prompt: `Extract a structured buying brief from this second-hand-marketplace request. If a field isn't mentioned, use your best reasonable guess from context, or null for size_token/location/availability. min_condition must be one of "like new", "very good", "good", "fair" — pick the closest one. target_price is what the buyer hopes to pay; max_price is their absolute ceiling (if only one price is mentioned, set max_price a little above target_price).\n\n"""${rawText}"""`,
+      prompt: `Extract a structured buying brief from this second-hand-marketplace request. If a field isn't mentioned, use your best reasonable guess from context, or null for size_token/location/availability. min_condition must be one of "like new", "very good", "good", "fair" — pick the closest one. target_price is what the buyer hopes to pay; max_price is their absolute ceiling. If the request states no max price at all, set max_price = round(target_price × 1.18 / 5) × 5 (round to the nearest £5).\n\n"""${rawText}"""`,
     });
     return object;
   } catch {

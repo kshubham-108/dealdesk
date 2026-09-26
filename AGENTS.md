@@ -437,3 +437,36 @@ negotiations in about two minutes with the outcomes in §8c, recommends Frank, a
 arranges collection and closes the others politely. The results panel shows real numbers from
 that run. Tests green. README and NOTES.md complete. Grok Bot's real-market scout feeds the
 market reference (via MCP or the import box).
+
+## 14. Amendments v3
+
+1. Telegram is removed. The buyer starts hunts, gets updates and approves deals on WhatsApp
+   through a Wassist agent that calls our REST endpoints (item 5), plus the arena's Approve button.
+2. The MCP server (§9) becomes optional. Grok Bot feeds real listings through the arena's
+   JSON Import box.
+3. New columns: briefs.tick_lock_until timestamptz; briefs.source text not null default 'web'
+   ('web' | 'whatsapp'). If a brief states no max, max = round5(target × 1.18).
+4. POST /api/autopilot/tick takes a lock: set tick_lock_until = now() + 4 s only where it is
+   null or in the past; if no row was updated, return {skipped: true}. Concurrent drivers must
+   never double-send.
+5. WhatsApp endpoints for Wassist. Auth: header x-api-key = MCP_API_KEY, or ?key= in the URL.
+   Accept GET and POST; read params from the JSON body or the query string. Always return 200
+   JSON with a `reply` string written for WhatsApp (max 5 short lines, UK English, no tables),
+   built from the database without an LLM, never containing the max, a ceiling or a seller floor.
+   - /api/wa/start {request}: parse like /api/briefs (fallback: demo values); agent_mode
+     autopilot; source whatsapp; run one tick. Reply: "On it: hunting for <item> around
+     £<target>. I'll screen every listing, message the sellers and haggle for you. Watch live:
+     <APP>/hunt/<id>. Ask me "how's it going?" any time."
+   - /api/wa/status: latest hunt; run one tick first. While running: how many contacted, agreed
+     and blocked, and who it's still negotiating with. With pending approvals: the best deal
+     (title, seller, £agreed vs £asking, DealScore and its top reasons), other agreed deals in
+     one line, the remaining outcomes in one line, then "Reply YES to approve <seller>." Also
+     return the pending approvals and recommended_approval_id.
+   - /api/wa/approve {choice?}: approve the recommended pending approval, or the one whose seller
+     name matches `choice`, and run the on-approve flow. Reply: "Approved: <title> for £<price>.
+     I've asked <seller> for the postcode and thanked the other sellers." If nothing is pending,
+     reply with the status instead.
+6. /live polls GET /api/hunt/latest every 2 s and shows the newest hunt's arena; the arena with
+   ?auto=1 runs the autopilot loop automatically.
+7. Milestones: this prompt = backend by 14:45; next prompt = arena UI by 15:25; feature freeze
+   15:25; README and video by 16:20.
