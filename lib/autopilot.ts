@@ -52,6 +52,26 @@ export async function runOneTick(
   return { skipped: false, ran };
 }
 
+// /api/autopilot/tick keeps the plain skip-on-contention behaviour (that's
+// the point of the lock for a poller that will just try again in 2.5s). The
+// WhatsApp endpoints promise the human a tick happened before they reply, so
+// they use this instead: retry through transient lock contention rather than
+// silently no-op.
+export async function runOneTickEnsured(
+  supabase: SupabaseClient,
+  briefId: string,
+  ghostTimeoutS: number,
+  maxAttempts = 5
+): Promise<{ skipped: boolean; ran?: number }> {
+  let result: { skipped: boolean; ran?: number } = { skipped: true };
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    result = await runOneTick(supabase, briefId, ghostTimeoutS);
+    if (!result.skipped) return result;
+    await new Promise((resolve) => setTimeout(resolve, 300 + attempt * 200));
+  }
+  return result;
+}
+
 export function ghostTimeoutSeconds(): number {
   const raw = process.env.GHOST_TIMEOUT_SECONDS;
   const n = raw ? parseInt(raw, 10) : NaN;

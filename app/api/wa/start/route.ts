@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSupabase } from "@/lib/supabase";
 import { parseBrief } from "@/lib/brief";
 import { checkApiKey, readParams } from "@/lib/wa";
-import { runOneTick, ghostTimeoutSeconds } from "@/lib/autopilot";
+import { runOneTickEnsured, ghostTimeoutSeconds } from "@/lib/autopilot";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -48,7 +48,7 @@ async function handle(req: NextRequest) {
     .from("events")
     .insert({ brief_id: data.id, kind: "brief_created", detail: { source: "whatsapp" } });
 
-  await runOneTick(supabase, data.id, ghostTimeoutSeconds());
+  await runOneTickEnsured(supabase, data.id, ghostTimeoutSeconds());
 
   const appUrl = (process.env.NEXT_PUBLIC_APP_URL ?? "").replace(/\/+$/, "");
   const reply =

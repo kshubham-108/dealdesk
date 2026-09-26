@@ -86,6 +86,16 @@ export async function screenListingsForHunt(supabase: SupabaseClient, briefId: s
   for (const listing of listings ?? []) {
     if (alreadyScreened.has(listing.id)) continue;
 
+    // Listings with no keyword/category match aren't "screened" at all — no
+    // deal row, so they never show up as noise in the screening strip or the
+    // WhatsApp status reply. WRONG_SIZE and the other skip reasons still get
+    // a (skipped) deal row, since those are genuine near-misses worth showing.
+    const haystack = `${listing.title} ${listing.category ?? ""}`.toLowerCase();
+    const hasKeyword = (brief.keywords as string[]).some((k: string) =>
+      haystack.includes(k.toLowerCase())
+    );
+    if (!hasKeyword) continue;
+
     const result = dealScore({
       listing,
       brief: {

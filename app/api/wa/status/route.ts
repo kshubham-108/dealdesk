@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSupabase } from "@/lib/supabase";
 import { checkApiKey, buildStatusReply } from "@/lib/wa";
 import { getHuntState, getLatestBriefId } from "@/lib/huntState";
-import { runOneTick, ghostTimeoutSeconds } from "@/lib/autopilot";
+import { runOneTickEnsured, ghostTimeoutSeconds } from "@/lib/autopilot";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -21,7 +21,7 @@ async function handle(req: NextRequest) {
     });
   }
 
-  await runOneTick(supabase, briefId, ghostTimeoutSeconds());
+  await runOneTickEnsured(supabase, briefId, ghostTimeoutSeconds());
 
   const state = await getHuntState(supabase, briefId);
   if (!state) {
