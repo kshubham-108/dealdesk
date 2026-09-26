@@ -50,7 +50,7 @@ async function handle(req: NextRequest) {
 
   await runOneTick(supabase, data.id, ghostTimeoutSeconds());
 
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "";
+  const appUrl = (process.env.NEXT_PUBLIC_APP_URL ?? "").replace(/\/+$/, "");
   const reply =
     `On it: hunting for ${fields.item} around £${fields.target_price}. I'll screen every listing, ` +
     `message the sellers and haggle for you. Watch live: ${appUrl}/hunt/${data.id}. ` +

@@ -189,6 +189,12 @@ export async function runDecision(
       kind: "message_sent",
       detail: { sender: "buyer_agent", price: result.offer ?? null, reasonCodes: result.reasonCodes },
     });
+
+    // Only 'send'/'chase' expect a seller reply — 'request_approval's
+    // confirmation message doesn't (the seller hears back on actual approval).
+    if (result.action === "send" || result.action === "chase") {
+      after(() => sendSellerReply(supabase, dealId, result.say as string));
+    }
   }
 
   const updates: Record<string, unknown> = {
