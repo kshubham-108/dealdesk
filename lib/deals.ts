@@ -1,7 +1,7 @@
 import { after } from "next/server";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { decide, type EngineMessage } from "./engine";
-import { dealScore, shouldContact, type Disclosure } from "./score";
+import { dealScore, matchesKeywords, shouldContact, type Disclosure } from "./score";
 import { sendSellerReply } from "./seller";
 
 export async function getOrCreateDeal(
@@ -90,11 +90,8 @@ export async function screenListingsForHunt(supabase: SupabaseClient, briefId: s
     // deal row, so they never show up as noise in the screening strip or the
     // WhatsApp status reply. WRONG_SIZE and the other skip reasons still get
     // a (skipped) deal row, since those are genuine near-misses worth showing.
-    const haystack = `${listing.title} ${listing.category ?? ""}`.toLowerCase();
-    const hasKeyword = (brief.keywords as string[]).some((k: string) =>
-      haystack.includes(k.toLowerCase())
-    );
-    if (!hasKeyword) continue;
+    const haystack = `${listing.title} ${listing.category ?? ""}`;
+    if (!matchesKeywords(haystack, brief.keywords as string[])) continue;
 
     const result = dealScore({
       listing,

@@ -119,13 +119,30 @@ function priceScore(effectivePrice: number, ref: number) {
   return { score: 4, tooGood: false };
 }
 
+// Brief parsing can produce multi-word phrases ("road bike", "weekend rides")
+// rather than a single generic category word. Matching the whole phrase as a
+// contiguous substring is too strict — a listing titled "Trek Domane AL 2"
+// with category "bike" is obviously a fit for a "road bike" brief even though
+// the substring "road bike" never appears verbatim. Match at the word level
+// instead: any single word from any keyword is enough.
+export function matchesKeywords(haystack: string, keywords: string[]): boolean {
+  const h = haystack.toLowerCase();
+  return keywords.some((kw) =>
+    kw
+      .toLowerCase()
+      .split(/\s+/)
+      .filter(Boolean)
+      .some((word) => h.includes(word))
+  );
+}
+
 export function dealScore(input: ScoreInput): ScoreResult {
   const now = input.now ?? new Date();
   const { listing, brief, marketRef, agreedPrice } = input;
   const disclosure: Disclosure = input.disclosure ?? "none";
 
-  const haystack = `${listing.title} ${listing.category ?? ""}`.toLowerCase();
-  const hasKeyword = brief.keywords.some((k) => haystack.includes(k.toLowerCase()));
+  const haystack = `${listing.title} ${listing.category ?? ""}`;
+  const hasKeyword = matchesKeywords(haystack, brief.keywords);
   if (!hasKeyword) return skipResult("NO_MATCH");
 
   if (brief.size_token) {
