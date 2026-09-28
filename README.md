@@ -2,7 +2,7 @@
 
 **An AI agent for each side of a second-hand deal.**
 
-🎥 Demo video: _placeholder — link goes here_
+🎥 Demo video: https://www.loom.com/share/c55d3231eb804755974286361ccd3f2e
 
 ---
 
